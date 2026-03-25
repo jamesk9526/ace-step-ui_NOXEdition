@@ -16,6 +16,7 @@ import { generateApi, songsApi, playlistsApi, getAudioUrl } from './services/api
 import { useAuth } from './context/AuthContext';
 import { useResponsive } from './context/ResponsiveContext';
 import { I18nProvider, useI18n } from './context/I18nContext';
+import { useSettings } from './context/SettingsContext';
 import { List } from 'lucide-react';
 import { PlaylistDetail } from './components/PlaylistDetail';
 import { Toast, ToastType } from './components/Toast';
@@ -39,12 +40,8 @@ function AppContent() {
   const activeJobsRef = useRef<Map<string, { tempId: string; pollInterval: ReturnType<typeof setInterval> }>>(new Map());
   const [activeJobCount, setActiveJobCount] = useState(0);
 
-  // Theme State
-  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
-    const stored = localStorage.getItem('theme');
-    if (stored === 'dark' || stored === 'light') return stored;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-  });
+  // Settings
+  const { settings, updateSetting } = useSettings();
 
   // Navigation State - default to create view
   const [currentView, setCurrentView] = useState<View>('create');
@@ -66,18 +63,9 @@ function AppContent() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(() => {
-    const stored = localStorage.getItem('volume');
-    return stored ? parseFloat(stored) : 0.8;
-  });
-  const [playbackRate, setPlaybackRate] = useState(1.0);
-  const [isShuffle, setIsShuffle] = useState(false);
-  const [repeatMode, setRepeatMode] = useState<'none' | 'all' | 'one'>('all');
 
   // UI State
   const [isGenerating, setIsGenerating] = useState(false);
-  const [showRightSidebar, setShowRightSidebar] = useState(true);
-  const [showLeftSidebar, setShowLeftSidebar] = useState(true);
   const [pendingAudioSelection, setPendingAudioSelection] = useState<{ target: 'reference' | 'source'; url: string; title?: string } | null>(null);
 
   // Mobile UI Toggle
@@ -232,18 +220,10 @@ function AppContent() {
     window.history.pushState({}, '', '/');
   };
 
-  // Theme Effect
-  useEffect(() => {
-    localStorage.setItem('theme', theme);
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
-  }, [theme]);
+  // Theme Effect - removed, now handled by SettingsContext
 
   const toggleTheme = () => {
-    setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+    updateSetting('theme', settings.theme === 'dark' ? 'light' : 'dark');
   };
 
   // URL Routing Effect
@@ -400,7 +380,7 @@ function AppContent() {
       : queue.findIndex(s => s.id === currentSong.id);
     if (currentIndex === -1) return;
 
-    if (repeatMode === 'one') {
+    if (settings.repeatMode === 'one') {
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
         audioRef.current.play();
@@ -412,13 +392,13 @@ function AppContent() {
     const queueLen = queue.length;
     for (let i = 1; i <= queueLen; i++) {
       let nextIndex;
-      if (isShuffle) {
+      if (settings.isShuffle) {
         nextIndex = Math.floor(Math.random() * queueLen);
         if (queueLen > 1 && nextIndex === currentIndex) continue;
       } else {
         nextIndex = currentIndex + i;
         // In 'none' repeat mode, stop at end of queue
-        if (repeatMode === 'none' && nextIndex >= queueLen) {
+        if (settings.repeatMode === 'none' && nextIndex >= queueLen) {
           setIsPlaying(false);
           return;
         }
@@ -436,7 +416,7 @@ function AppContent() {
 
     // No playable songs found
     setIsPlaying(false);
-  }, [currentSong, queueIndex, isShuffle, repeatMode, playQueue, songs]);
+  }, [currentSong, queueIndex, settings.isShuffle, settings.repeatMode, playQueue, songs]);
 
   const playPrevious = useCallback(() => {
     if (!currentSong) return;
@@ -457,13 +437,13 @@ function AppContent() {
     const queueLen = queue.length;
     for (let i = 1; i <= queueLen; i++) {
       let prevIndex;
-      if (isShuffle) {
+      if (settings.isShuffle) {
         prevIndex = Math.floor(Math.random() * queueLen);
         if (queueLen > 1 && prevIndex === currentIndex) continue;
       } else {
         prevIndex = currentIndex - i;
         // In 'none' repeat mode, stop at beginning of queue
-        if (repeatMode === 'none' && prevIndex < 0) {
+        if (settings.repeatMode === 'none' && prevIndex < 0) {
           if (audioRef.current) audioRef.current.currentTime = 0;
           return;
         }
@@ -481,7 +461,7 @@ function AppContent() {
 
     // No playable songs found
     setIsPlaying(false);
-  }, [currentSong, queueIndex, currentTime, isShuffle, repeatMode, playQueue, songs]);
+  }, [currentSong, queueIndex, currentTime, settings.isShuffle, settings.repeatMode, playQueue, songs]);
 
   useEffect(() => {
     playNextRef.current = playNext;
@@ -492,7 +472,7 @@ function AppContent() {
     audioRef.current = new Audio();
     audioRef.current.crossOrigin = "anonymous";
     const audio = audioRef.current;
-    audio.volume = volume;
+    audio.volume = settings.volume;
 
     const onTimeUpdate = () => setCurrentTime(audio.currentTime);
     const applyPendingSeek = () => {
@@ -587,17 +567,16 @@ function AppContent() {
   // Handle Volume
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = volume;
+      audioRef.current.volume = settings.volume;
     }
-    localStorage.setItem('volume', String(volume));
-  }, [volume]);
+  }, [settings.volume]);
 
   // Handle Playback Rate
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.playbackRate = playbackRate;
+      audioRef.current.playbackRate = settings.playbackRate;
     }
-  }, [playbackRate]);
+  }, [settings.playbackRate]);
 
   // Spacebar play/pause
   useEffect(() => {
@@ -794,7 +773,7 @@ function AppContent() {
 
     setSongs(prev => [tempSong, ...prev]);
     setSelectedSong(tempSong);
-    setShowRightSidebar(true);
+    updateSetting('showRightSidebar', true);
 
     try {
       const job = await generateApi.startGeneration({
@@ -960,7 +939,7 @@ function AppContent() {
     if (currentSong?.id === song.id) {
       setSelectedSong(song);
     }
-    setShowRightSidebar(true);
+    updateSetting('showRightSidebar', true);
   };
 
   const handleSeek = (time: number) => {
@@ -1260,7 +1239,7 @@ function AppContent() {
             onPlaySong={playSong}
             onSelect={(s) => {
               setSelectedSong(s);
-              setShowRightSidebar(true);
+              updateSetting('showRightSidebar', true);
             }}
             onNavigateToProfile={handleNavigateToProfile}
           />
@@ -1333,7 +1312,7 @@ function AppContent() {
                 onPlay={playSong}
                 onSelect={(s) => {
                   setSelectedSong(s);
-                  setShowRightSidebar(true);
+                  updateSetting('showRightSidebar', true);
                 }}
                 onToggleLike={toggleLike}
                 onAddToPlaylist={openAddToPlaylistModal}
@@ -1352,11 +1331,11 @@ function AppContent() {
             </div>
 
             {/* Right Sidebar */}
-            {showRightSidebar && (
+            {settings.showRightSidebar && (
               <div className="hidden xl:block w-[360px] flex-shrink-0 h-full bg-zinc-50 dark:bg-suno-panel relative z-10 border-l border-zinc-200 dark:border-white/5 transition-colors duration-300">
                 <RightSidebar
                   song={selectedSong}
-                  onClose={() => setShowRightSidebar(false)}
+                  onClose={() => updateSetting('showRightSidebar', false)}
                   onOpenVideo={() => selectedSong && openVideoGenerator(selectedSong)}
                   onReuse={handleReuse}
                   onSongUpdate={handleSongUpdate}
@@ -1404,16 +1383,16 @@ function AppContent() {
             } else if (v === 'news') {
               window.history.pushState({}, '', '/news');
             }
-            if (isMobile) setShowLeftSidebar(false);
+            if (isMobile) updateSetting('showLeftSidebar', false);
           }}
-          theme={theme}
+          theme={settings.theme}
           onToggleTheme={toggleTheme}
           user={user}
           onLogin={() => setShowUsernameModal(true)}
           onLogout={logout}
           onOpenSettings={() => setShowSettingsModal(true)}
-          isOpen={showLeftSidebar}
-          onToggle={() => setShowLeftSidebar(!showLeftSidebar)}
+          isOpen={settings.showLeftSidebar}
+          onToggle={() => updateSetting('showLeftSidebar', !settings.showLeftSidebar)}
         />
 
         <main className="flex-1 flex overflow-hidden relative">
@@ -1430,15 +1409,15 @@ function AppContent() {
         onSeek={handleSeek}
         onNext={playNext}
         onPrevious={playPrevious}
-        volume={volume}
-        onVolumeChange={setVolume}
-        playbackRate={playbackRate}
-        onPlaybackRateChange={setPlaybackRate}
+        volume={settings.volume}
+        onVolumeChange={(vol) => updateSetting('volume', vol)}
+        playbackRate={settings.playbackRate}
+        onPlaybackRateChange={(rate) => updateSetting('playbackRate', rate)}
         audioRef={audioRef}
-        isShuffle={isShuffle}
-        onToggleShuffle={() => setIsShuffle(!isShuffle)}
-        repeatMode={repeatMode}
-        onToggleRepeat={() => setRepeatMode(prev => prev === 'none' ? 'all' : prev === 'all' ? 'one' : 'none')}
+        isShuffle={settings.isShuffle}
+        onToggleShuffle={() => updateSetting('isShuffle', !settings.isShuffle)}
+        repeatMode={settings.repeatMode}
+        onToggleRepeat={() => updateSetting('repeatMode', settings.repeatMode === 'none' ? 'all' : settings.repeatMode === 'all' ? 'one' : 'none')}
         isLiked={currentSong ? likedSongIds.has(currentSong.id) : false}
         onToggleLike={() => currentSong && toggleLike(currentSong.id)}
         onNavigateToSong={handleNavigateToSong}
@@ -1482,7 +1461,7 @@ function AppContent() {
       <SettingsModal
         isOpen={showSettingsModal}
         onClose={() => setShowSettingsModal(false)}
-        theme={theme}
+        theme={settings.theme}
         onToggleTheme={toggleTheme}
         onNavigateToProfile={handleNavigateToProfile}
       />

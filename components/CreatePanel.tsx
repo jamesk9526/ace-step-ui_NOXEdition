@@ -6,6 +6,7 @@ import { useI18n } from '../context/I18nContext';
 import { generateApi } from '../services/api';
 import { MAIN_STYLES } from '../data/genres';
 import { EditableSlider } from './EditableSlider';
+import { useFormStorage, clearFormStorage } from '../hooks/useFormStorage';
 
 interface ReferenceTrack {
   id: string;
@@ -136,100 +137,90 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
   const [customMode, setCustomMode] = useState(true);
 
   // Simple Mode
-  const [songDescription, setSongDescription] = useState('');
+  const [songDescription, setSongDescription] = useFormStorage('songDescription', '');
 
   // Custom Mode
-  const [lyrics, setLyrics] = useState('');
-  const [style, setStyle] = useState('');
-  const [title, setTitle] = useState('');
+  const [lyrics, setLyrics] = useFormStorage('lyrics', '');
+  const [style, setStyle] = useFormStorage('style', '');
+  const [title, setTitle] = useFormStorage('title', '');
 
   // Common
-  const [instrumental, setInstrumental] = useState(false);
-  const [vocalLanguage, setVocalLanguage] = useState('en');
-  const [vocalGender, setVocalGender] = useState<'male' | 'female' | ''>('');
+  const [instrumental, setInstrumental] = useFormStorage('instrumental', false);
+  const [vocalLanguage, setVocalLanguage] = useFormStorage('vocalLanguage', 'en');
+  const [vocalGender, setVocalGender] = useFormStorage<'male' | 'female' | ''>('vocalGender', '');
 
   // Music Parameters
-  const [bpm, setBpm] = useState(0);
-  const [keyScale, setKeyScale] = useState('');
-  const [timeSignature, setTimeSignature] = useState('');
+  const [bpm, setBpm] = useFormStorage('bpm', 0);
+  const [keyScale, setKeyScale] = useFormStorage('keyScale', '');
+  const [timeSignature, setTimeSignature] = useFormStorage('timeSignature', '');
 
   // Advanced Settings
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [duration, setDuration] = useState(-1);
-  const [batchSize, setBatchSize] = useState(() => {
-    const stored = localStorage.getItem('ace-batchSize');
-    return stored ? Number(stored) : 1;
-  });
-  const [bulkCount, setBulkCount] = useState(() => {
-    const stored = localStorage.getItem('ace-bulkCount');
-    return stored ? Number(stored) : 1;
-  });
-  const [guidanceScale, setGuidanceScale] = useState(9.0);
-  const [randomSeed, setRandomSeed] = useState(true);
-  const [seed, setSeed] = useState(-1);
-  const [thinking, setThinking] = useState(false); // Default false for GPU compatibility
-  const [enhance, setEnhance] = useState(false); // AI Enhance: uses LLM to enrich caption & generate metadata
-  const [audioFormat, setAudioFormat] = useState<'mp3' | 'flac'>('mp3');
-  const [inferenceSteps, setInferenceSteps] = useState(12);
-  const [inferMethod, setInferMethod] = useState<'ode' | 'sde'>('ode');
-  const [lmBackend, setLmBackend] = useState<'pt' | 'vllm'>('pt');
-  const [lmModel, setLmModel] = useState(() => {
-    return localStorage.getItem('ace-lmModel') || 'acestep-5Hz-lm-0.6B';
-  });
-  const [shift, setShift] = useState(3.0);
+  const [duration, setDuration] = useFormStorage('duration', -1);
+  const [batchSize, setBatchSize] = useFormStorage('batchSize', 1);
+  const [bulkCount, setBulkCount] = useFormStorage('bulkCount', 1);
+  const [guidanceScale, setGuidanceScale] = useFormStorage('guidanceScale', 9.0);
+  const [randomSeed, setRandomSeed] = useFormStorage('randomSeed', true);
+  const [seed, setSeed] = useFormStorage('seed', -1);
+  const [thinking, setThinking] = useFormStorage('thinking', false);
+  const [enhance, setEnhance] = useFormStorage('enhance', false);
+  const [audioFormat, setAudioFormat] = useFormStorage<'mp3' | 'flac'>('audioFormat', 'mp3');
+  const [inferenceSteps, setInferenceSteps] = useFormStorage('inferenceSteps', 12);
+  const [inferMethod, setInferMethod] = useFormStorage<'ode' | 'sde'>('inferMethod', 'ode');
+  const [lmBackend, setLmBackend] = useFormStorage<'pt' | 'vllm'>('lmBackend', 'pt');
+  const [lmModel, setLmModel] = useFormStorage('lmModel', 'acestep-5Hz-lm-0.6B');
+  const [shift, setShift] = useFormStorage('shift', 3.0);
 
   // LM Parameters (under Expert)
   const [showLmParams, setShowLmParams] = useState(false);
-  const [lmTemperature, setLmTemperature] = useState(0.8);
-  const [lmCfgScale, setLmCfgScale] = useState(2.2);
-  const [lmTopK, setLmTopK] = useState(0);
-  const [lmTopP, setLmTopP] = useState(0.92);
-  const [lmNegativePrompt, setLmNegativePrompt] = useState('NO USER INPUT');
+  const [lmTemperature, setLmTemperature] = useFormStorage('lmTemperature', 0.8);
+  const [lmCfgScale, setLmCfgScale] = useFormStorage('lmCfgScale', 2.2);
+  const [lmTopK, setLmTopK] = useFormStorage('lmTopK', 0);
+  const [lmTopP, setLmTopP] = useFormStorage('lmTopP', 0.92);
+  const [lmNegativePrompt, setLmNegativePrompt] = useFormStorage('lmNegativePrompt', 'NO USER INPUT');
 
   // Expert Parameters (now in Advanced section)
-  const [referenceAudioUrl, setReferenceAudioUrl] = useState('');
-  const [sourceAudioUrl, setSourceAudioUrl] = useState('');
-  const [referenceAudioTitle, setReferenceAudioTitle] = useState('');
-  const [sourceAudioTitle, setSourceAudioTitle] = useState('');
-  const [audioCodes, setAudioCodes] = useState('');
-  const [repaintingStart, setRepaintingStart] = useState(0);
-  const [repaintingEnd, setRepaintingEnd] = useState(-1);
-  const [instruction, setInstruction] = useState('Fill the audio semantic mask based on the given conditions:');
-  const [audioCoverStrength, setAudioCoverStrength] = useState(1.0);
-  const [taskType, setTaskType] = useState('text2music');
-  const [useAdg, setUseAdg] = useState(false);
-  const [cfgIntervalStart, setCfgIntervalStart] = useState(0.0);
-  const [cfgIntervalEnd, setCfgIntervalEnd] = useState(1.0);
-  const [customTimesteps, setCustomTimesteps] = useState('');
-  const [useCotMetas, setUseCotMetas] = useState(true);
-  const [useCotCaption, setUseCotCaption] = useState(true);
-  const [useCotLanguage, setUseCotLanguage] = useState(true);
-  const [autogen, setAutogen] = useState(false);
-  const [constrainedDecodingDebug, setConstrainedDecodingDebug] = useState(false);
-  const [allowLmBatch, setAllowLmBatch] = useState(true);
-  const [getScores, setGetScores] = useState(false);
-  const [getLrc, setGetLrc] = useState(false);
-  const [scoreScale, setScoreScale] = useState(0.5);
-  const [lmBatchChunkSize, setLmBatchChunkSize] = useState(8);
-  const [trackName, setTrackName] = useState('');
-  const [completeTrackClasses, setCompleteTrackClasses] = useState('');
-  const [isFormatCaption, setIsFormatCaption] = useState(false);
-  const [maxDurationWithLm, setMaxDurationWithLm] = useState(240);
-  const [maxDurationWithoutLm, setMaxDurationWithoutLm] = useState(240);
+  const [referenceAudioUrl, setReferenceAudioUrl] = useFormStorage('referenceAudioUrl', '');
+  const [sourceAudioUrl, setSourceAudioUrl] = useFormStorage('sourceAudioUrl', '');
+  const [referenceAudioTitle, setReferenceAudioTitle] = useFormStorage('referenceAudioTitle', '');
+  const [sourceAudioTitle, setSourceAudioTitle] = useFormStorage('sourceAudioTitle', '');
+  const [audioCodes, setAudioCodes] = useFormStorage('audioCodes', '');
+  const [repaintingStart, setRepaintingStart] = useFormStorage('repaintingStart', 0);
+  const [repaintingEnd, setRepaintingEnd] = useFormStorage('repaintingEnd', -1);
+  const [instruction, setInstruction] = useFormStorage('instruction', 'Fill the audio semantic mask based on the given conditions:');
+  const [audioCoverStrength, setAudioCoverStrength] = useFormStorage('audioCoverStrength', 1.0);
+  const [taskType, setTaskType] = useFormStorage('taskType', 'text2music');
+  const [useAdg, setUseAdg] = useFormStorage('useAdg', false);
+  const [cfgIntervalStart, setCfgIntervalStart] = useFormStorage('cfgIntervalStart', 0.0);
+  const [cfgIntervalEnd, setCfgIntervalEnd] = useFormStorage('cfgIntervalEnd', 1.0);
+  const [customTimesteps, setCustomTimesteps] = useFormStorage('customTimesteps', '');
+  const [useCotMetas, setUseCotMetas] = useFormStorage('useCotMetas', true);
+  const [useCotCaption, setUseCotCaption] = useFormStorage('useCotCaption', true);
+  const [useCotLanguage, setUseCotLanguage] = useFormStorage('useCotLanguage', true);
+  const [autogen, setAutogen] = useFormStorage('autogen', false);
+  const [constrainedDecodingDebug, setConstrainedDecodingDebug] = useFormStorage('constrainedDecodingDebug', false);
+  const [allowLmBatch, setAllowLmBatch] = useFormStorage('allowLmBatch', true);
+  const [getScores, setGetScores] = useFormStorage('getScores', false);
+  const [getLrc, setGetLrc] = useFormStorage('getLrc', false);
+  const [scoreScale, setScoreScale] = useFormStorage('scoreScale', 0.5);
+  const [lmBatchChunkSize, setLmBatchChunkSize] = useFormStorage('lmBatchChunkSize', 8);
+  const [trackName, setTrackName] = useFormStorage('trackName', '');
+  const [completeTrackClasses, setCompleteTrackClasses] = useFormStorage('completeTrackClasses', '');
+  const [isFormatCaption, setIsFormatCaption] = useFormStorage('isFormatCaption', false);
+  const [maxDurationWithLm, setMaxDurationWithLm] = useFormStorage('maxDurationWithLm', 240);
+  const [maxDurationWithoutLm, setMaxDurationWithoutLm] = useFormStorage('maxDurationWithoutLm', 240);
 
   // LoRA Parameters
   const [showLoraPanel, setShowLoraPanel] = useState(false);
-  const [loraPath, setLoraPath] = useState('./lora_output/final/adapter');
-  const [loraLoaded, setLoraLoaded] = useState(false);
-  const [loraEnabled, setLoraEnabled] = useState(true);
-  const [loraScale, setLoraScale] = useState(1.0);
+  const [loraPath, setLoraPath] = useFormStorage('loraPath', './lora_output/final/adapter');
+  const [loraLoaded, setLoraLoaded] = useFormStorage('loraLoaded', false);
+  const [loraEnabled, setLoraEnabled] = useFormStorage('loraEnabled', true);
+  const [loraScale, setLoraScale] = useFormStorage('loraScale', 1.0);
   const [loraError, setLoraError] = useState<string | null>(null);
   const [isLoraLoading, setIsLoraLoading] = useState(false);
 
   // Model selection
-  const [selectedModel, setSelectedModel] = useState<string>(() => {
-    return localStorage.getItem('ace-model') || 'acestep-v15-turbo-shift3';
-  });
+  const [selectedModel, setSelectedModel] = useFormStorage('selectedModel', 'acestep-v15-turbo-shift3');
   const [showModelMenu, setShowModelMenu] = useState(false);
   const modelMenuRef = useRef<HTMLDivElement>(null);
   const previousModelRef = useRef<string>(selectedModel);
@@ -566,7 +557,6 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
           const active = models.find((m: any) => m.is_active);
           if (active) {
             setSelectedModel(active.name);
-            localStorage.setItem('ace-model', active.name);
           }
         }
       }
@@ -1318,7 +1308,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('key')}</label>
                   <select
                     value={keyScale}
-                    onChange={setKeyScale}
+                    onChange={(e) => setKeyScale(e.target.value)}
                     className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 dark:focus:border-pink-500 transition-colors cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
                   >
                     <option value="">Auto</option>
@@ -1331,7 +1321,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                   <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('time')}</label>
                   <select
                     value={timeSignature}
-                    onChange={setTimeSignature}
+                    onChange={(e) => setTimeSignature(e.target.value)}
                     className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-xl px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none focus:border-pink-500 dark:focus:border-pink-500 transition-colors cursor-pointer [&>option]:bg-white [&>option]:dark:bg-zinc-800 [&>option]:text-zinc-900 [&>option]:dark:text-white"
                   >
                     <option value="">Auto</option>
@@ -1943,7 +1933,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
                 {[1, 2, 3, 5, 10].map((count) => (
                   <button
                     key={count}
-                    onClick={() => { setBulkCount(count); localStorage.setItem('ace-bulkCount', String(count)); }}
+                    onClick={() => { setBulkCount(count); }}
                     className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                       bulkCount === count
                         ? 'bg-gradient-to-r from-orange-500 to-pink-600 text-white shadow-md'
@@ -2027,7 +2017,7 @@ export const CreatePanel: React.FC<CreatePanelProps> = ({
               <label className="text-xs font-medium text-zinc-600 dark:text-zinc-400">{t('lmModelLabel')}</label>
               <select
                 value={lmModel}
-                onChange={(e) => { const v = e.target.value; setLmModel(v); localStorage.setItem('ace-lmModel', v); }}
+                onChange={(e) => { const v = e.target.value; setLmModel(v); }}
                 className="w-full bg-zinc-50 dark:bg-black/20 border border-zinc-200 dark:border-white/10 rounded-lg px-2 py-1.5 text-xs text-zinc-900 dark:text-white focus:outline-none"
               >
                 <option value="acestep-5Hz-lm-0.6B">{t('lmModel06B')}</option>

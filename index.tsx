@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { AuthProvider } from './context/AuthContext';
 import { ResponsiveProvider } from './context/ResponsiveContext';
+import { SettingsProvider } from './context/SettingsContext';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -14,7 +15,9 @@ root.render(
   <React.StrictMode>
     <AuthProvider>
       <ResponsiveProvider>
-        <App />
+        <SettingsProvider>
+          <App />
+        </SettingsProvider>
       </ResponsiveProvider>
     </AuthProvider>
   </React.StrictMode>

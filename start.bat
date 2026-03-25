@@ -3,7 +3,7 @@ REM ACE-Step UI Startup Script for Windows
 setlocal
 
 echo ==================================
-echo   ACE-Step UI (Windows)
+echo    ACE-Step UI (Windows)
 echo ==================================
 echo.
 
@@ -22,51 +22,63 @@ if not exist "server\node_modules" (
     exit /b 1
 )
 
-REM Get local IP for LAN access
-for /f "tokens=2 delims=:" %%a in ('ipconfig ^| findstr /c:"IPv4"') do (
-    for /f "tokens=1" %%b in ("%%a") do (
-        set LOCAL_IP=%%b
-    )
+REM Check if .env files exist
+if not exist ".env" (
+    echo Error: .env file not found!
+    echo Please run setup.bat first.
+    pause
+    exit /b 1
 )
 
+if not exist "server\.env" (
+    echo Error: server\.env file not found!
+    echo Please run setup.bat first.
+    pause
+    exit /b 1
+)
+
+echo.
 echo Starting ACE-Step UI...
 echo.
-echo Make sure ACE-Step API is running:
-echo   cd path\to\ACE-Step
+echo Frontend will be available at:   http://localhost:5173
+echo Backend will be available at:    http://localhost:3001
+echo.
+echo Make sure ACE-Step API is running (if needed):
+echo   cd path\to\ACE-Step-1.5
 echo   uv run acestep-api --port 8001
 echo.
 echo ==================================
 echo.
 
+REM Create necessary directories
+if not exist "server\data" mkdir "server\data"
+if not exist "server\public\audio" mkdir "server\public\audio"
+
 REM Start backend in new window
 echo Starting backend server...
-start "ACE-Step UI Backend" cmd /k "cd server && npm run dev"
+start "ACE-Step UI Backend" cmd /k "cd /d "%CD%\server" && npm run dev"
 
 REM Wait for backend to start
-echo Waiting for backend to start...
+echo Waiting for backend to start (3 seconds)...
 timeout /t 3 /nobreak >nul
 
 REM Start frontend in new window
-echo Starting frontend...
-start "ACE-Step UI Frontend" cmd /k "npm run dev"
+echo Starting frontend development server...
+start "ACE-Step UI Frontend" cmd /k "cd /d "%CD%" && npm run dev"
 
-REM Wait a moment
-timeout /t 2 /nobreak >nul
+REM Wait for frontend to start and try to open browser
+echo Waiting for frontend to start (3 seconds)...
+timeout /t 3 /nobreak >nul
+
+REM Try to open in default browser
+echo Opening application in browser...
+start http://localhost:5173
 
 echo.
-echo ==================================
-echo   ACE-Step UI Running!
-echo ==================================
+echo Application should now be loading...
+echo If the browser didn't open, visit: http://localhost:5173
 echo.
-echo   Frontend: http://localhost:3000
-echo   Backend:  http://localhost:3001
-echo.
-if defined LOCAL_IP (
-    echo   LAN Access: http://%LOCAL_IP%:3000
-    echo.
-)
-echo   Close the terminal windows to stop.
-echo.
+pause
 echo ==================================
 echo.
 echo Opening browser...

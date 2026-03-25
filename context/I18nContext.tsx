@@ -11,13 +11,19 @@ const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
 export const I18nProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [language, setLanguage] = useState<Language>(() => {
-    const stored = localStorage.getItem('language') as Language;
-    return stored === 'zh' || stored === 'en' || stored === 'ja' || stored === 'ko' ? stored : 'en';
+    // Try session storage first, then fall back to localStorage
+    const sessionStored = sessionStorage.getItem('language') as Language;
+    if (sessionStored === 'zh' || sessionStored === 'en' || sessionStored === 'ja' || sessionStored === 'ko') {
+      return sessionStored;
+    }
+    const localStored = localStorage.getItem('language') as Language;
+    return localStored === 'zh' || localStored === 'en' || localStored === 'ja' || localStored === 'ko' ? localStored : 'en';
   });
 
   const handleSetLanguage = (lang: Language) => {
     setLanguage(lang);
-    localStorage.setItem('language', lang);
+    sessionStorage.setItem('language', lang);
+    localStorage.setItem('language', lang); // Also keep in localStorage for persistence across sessions
   };
 
   const t = (key: TranslationKey): string => {
