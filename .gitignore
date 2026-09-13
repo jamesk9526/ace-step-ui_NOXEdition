@@ -94,3 +94,10 @@ wavacity-editor/
 
 # Script logs
 logs/
+.env.*
+out/
+release/
+bin/
+obj/
+venv/
+desktop.ini
