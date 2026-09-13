@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { rm, writeFile } from 'fs/promises';
 import { pool } from '../db/pool.js';
 import { generateUUID } from '../db/sqlite.js';
 import { config } from '../config/index.js';
@@ -18,6 +19,7 @@ import {
   downloadAudioToBuffer,
   resolvePythonPath,
 } from '../services/acestep.js';
+import { ensureLocalAceStepServer, resolveAceStepDir } from '../services/local-acestep.js';
 import { getStorageProvider } from '../services/storage/factory.js';
 
 const router = Router();
@@ -598,7 +600,7 @@ router.get('/endpoints', authMiddleware, async (_req: AuthenticatedRequest, res:
 
 router.get('/models', async (_req, res: Response) => {
   try {
-    const ACESTEP_DIR = process.env.ACESTEP_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../ACE-Step-1.5');
+    const ACESTEP_DIR = resolveAceStepDir();
     const checkpointsDir = path.join(ACESTEP_DIR, 'checkpoints');
 
     // All known DiT models from Gradio's model_downloader.py registry:
@@ -705,7 +707,7 @@ router.get('/health', async (_req, res: Response) => {
 router.get('/limits', async (_req, res: Response) => {
   try {
     const { spawn } = await import('child_process');
-    const ACESTEP_DIR = process.env.ACESTEP_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../ACE-Step-1.5');
+    const ACESTEP_DIR = resolveAceStepDir();
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     const SCRIPTS_DIR = path.join(__dirname, '../../scripts');
@@ -780,6 +782,8 @@ router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Re
     }
 
     const ACESTEP_API_URL = config.acestep.apiUrl;
+    await ensureLocalAceStepServer(ACESTEP_API_URL);
+    const formatApiUrl = new URL('/format_input', ACESTEP_API_URL).toString();
 
     // Build param_obj for the REST API
     const paramObj: Record<string, unknown> = {};
@@ -790,8 +794,8 @@ router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Re
 
     // Primary path: call ACE-Step's /format_input REST endpoint (avoids Python spawn ENOENT on Windows)
     try {
-      console.log(`[Format] Calling REST API: ${ACESTEP_API_URL}/format_input`);
-      const apiRes = await fetch(`${ACESTEP_API_URL}/format_input`, {
+      console.log(`[Format] Calling REST API: ${formatApiUrl}`);
+      const apiRes = await fetch(formatApiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -825,7 +829,14 @@ router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Re
       return;
     } catch (fetchErr: any) {
       // Only fall back to Python spawn on network errors (service not yet reachable)
-      if (fetchErr?.name !== 'AbortError' && (fetchErr?.code === 'ECONNREFUSED' || fetchErr?.cause?.code === 'ECONNREFUSED')) {
+      if (
+        fetchErr?.name !== 'AbortError' &&
+        (
+          fetchErr?.code === 'ECONNREFUSED' ||
+          fetchErr?.cause?.code === 'ECONNREFUSED' ||
+          fetchErr?.cause?.code === 'ECONNRESET'
+        )
+      ) {
         console.warn('[Format] REST API unreachable, falling back to Python spawn');
       } else {
         console.error('[Format] REST API request failed:', fetchErr?.message);
@@ -836,26 +847,32 @@ router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Re
 
     // Fallback: Python spawn (only reached when REST API is unreachable)
     const { spawn } = await import('child_process');
-    const ACESTEP_DIR = process.env.ACESTEP_PATH || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../ACE-Step-1.5');
+    const { tmpdir } = await import('os');
+    const ACESTEP_DIR = resolveAceStepDir();
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
     const SCRIPTS_DIR = path.join(__dirname, '../../scripts');
     const FORMAT_SCRIPT = path.join(SCRIPTS_DIR, 'format_sample.py');
     const pythonPath = resolvePythonPath(ACESTEP_DIR);
 
-    const args = [FORMAT_SCRIPT, '--caption', caption, '--json'];
-    if (lyrics) args.push('--lyrics', lyrics);
-    if (bpm && bpm > 0) args.push('--bpm', String(bpm));
-    if (duration && duration > 0) args.push('--duration', String(duration));
-    if (keyScale) args.push('--key-scale', keyScale);
-    if (timeSignature) args.push('--time-signature', timeSignature);
-    if (temperature !== undefined) args.push('--temperature', String(temperature));
-    if (topK && topK > 0) args.push('--top-k', String(topK));
-    if (topP !== undefined) args.push('--top-p', String(topP));
-    if (lmModel) args.push('--lm-model', lmModel);
-    if (lmBackend) args.push('--lm-backend', lmBackend);
+    const requestPayloadPath = path.join(tmpdir(), `ace-step-format-${generateUUID()}.json`);
+    await writeFile(requestPayloadPath, JSON.stringify({
+      caption,
+      lyrics: lyrics || '',
+      bpm: bpm && bpm > 0 ? bpm : 0,
+      duration: duration && duration > 0 ? duration : 0,
+      key_scale: keyScale || '',
+      time_signature: timeSignature || '',
+      temperature: temperature ?? 0.85,
+      top_k: topK && topK > 0 ? topK : 0,
+      top_p: topP ?? 0.9,
+      lm_model: lmModel || null,
+      lm_backend: lmBackend || null,
+    }), 'utf-8');
 
-    console.log(`[Format] Fallback spawn: ${pythonPath} ${args.join(' ')}`);
+    const args = [FORMAT_SCRIPT, '--input-json', requestPayloadPath, '--json'];
+
+    console.log(`[Format] Fallback spawn: ${pythonPath} ${FORMAT_SCRIPT} --input-json ${requestPayloadPath} --json`);
     const result = await new Promise<{ success: boolean; data?: any; error?: string }>((resolve) => {
       const proc = spawn(pythonPath, args, {
         cwd: ACESTEP_DIR,
@@ -895,6 +912,7 @@ router.post('/format', authMiddleware, async (req: AuthenticatedRequest, res: Re
         resolve({ success: false, error: err.message });
       });
     });
+    await rm(requestPayloadPath, { force: true }).catch(() => undefined);
 
     if (result.success && result.data) {
       res.json(result.data);

@@ -33,7 +33,7 @@ interface SettingsContextType {
 const SettingsContext = createContext<SettingsContextType | undefined>(undefined);
 
 const DEFAULT_SETTINGS: UISettings = {
-  theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+  theme: 'dark', // Set dark as default
   language: 'en',
   volume: 0.8,
   playbackRate: 1.0,

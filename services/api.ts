@@ -599,6 +599,25 @@ export interface TrainingParams {
   resumeCheckpoint?: string | null;
 }
 
+export interface TrainingStatus {
+  isTraining: boolean;
+  shouldStop: boolean;
+  currentStep: number;
+  currentLoss: number | null;
+  status: string;
+  config: Record<string, unknown>;
+  tensorDir: string;
+  lossHistory: Array<{ step?: number; loss?: number }>;
+  tensorboardUrl?: string | null;
+  tensorboardLogdir?: string | null;
+  trainingLog: string;
+  startTime?: number | null;
+  currentEpoch: number;
+  stepsPerSecond: number;
+  estimatedTimeRemaining: number;
+  error?: string | null;
+}
+
 // Helper: build proxy URL for training audio files
 export function getTrainingAudioUrl(audioPath: unknown, token?: string): string | undefined {
   if (!audioPath) return undefined;
@@ -777,6 +796,9 @@ export const trainingApi = {
 
   loadTensors: (tensorDir: string, token: string): Promise<{ status: string }> =>
     api('/api/training/load-tensors', { method: 'POST', body: { tensorDir }, token }),
+
+  getTrainingStatus: (token: string): Promise<TrainingStatus> =>
+    api('/api/training/status', { token }),
 
   startTraining: (params: TrainingParams, token: string): Promise<{
     progress: string;

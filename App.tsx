@@ -17,7 +17,7 @@ import { useAuth } from './context/AuthContext';
 import { useResponsive } from './context/ResponsiveContext';
 import { I18nProvider, useI18n } from './context/I18nContext';
 import { useSettings } from './context/SettingsContext';
-import { List } from 'lucide-react';
+import { List, PanelLeft } from 'lucide-react';
 import { PlaylistDetail } from './components/PlaylistDetail';
 import { Toast, ToastType } from './components/Toast';
 import { SearchPage } from './components/SearchPage';
@@ -1396,6 +1396,19 @@ function AppContent() {
         />
 
         <main className="flex-1 flex overflow-hidden relative">
+          {isMobile && !settings.showLeftSidebar && (
+            <div className="absolute top-4 left-4 z-40 md:hidden">
+              <button
+                onClick={() => updateSetting('showLeftSidebar', true)}
+                className="bg-zinc-800 text-white px-4 py-2 rounded-full shadow-lg border border-white/10 flex items-center gap-2 text-sm font-bold"
+                aria-label={t('expandSidebar')}
+                title={t('expandSidebar')}
+              >
+                <PanelLeft size={16} />
+                Menu
+              </button>
+            </div>
+          )}
           {renderContent()}
         </main>
       </div>

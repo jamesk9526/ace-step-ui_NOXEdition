@@ -6,6 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:electron:renderer": "cross-env BUILD_TARGET=electron vite build",
+    "build:electron:main": "tsc -p tsconfig.electron.json",
+    "build:electron": "npm run build:electron:renderer && npm run build:electron:main",
+    "electron:dev": "cross-env NODE_ENV=development electron electron-dist/main.js",
+    "electron:start": "cross-env NODE_ENV=production electron electron-dist/main.js",
+    "dist:electron": "npm run build:electron && electron-builder --win --x64",
     "preview": "vite preview",
     "start": "cd server && npx tsx src/index.ts & npm run dev"
   },
@@ -20,7 +26,50 @@
   "devDependencies": {
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "cross-env": "^7.0.3",
+    "electron": "^32.1.2",
+    "electron-builder": "^25.1.8",
+    "electron-log": "^5.2.4",
+    "electron-store": "^10.0.1",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
+  },
+  "build": {
+    "appId": "com.oyama.otunes",
+    "productName": "OTunes By Oyama",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron-dist/**/*",
+      "server/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "Ace-Step1.5",
+        "to": "Ace-Step1.5",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

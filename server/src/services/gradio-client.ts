@@ -1,5 +1,6 @@
 import { Client } from "@gradio/client";
 import { config } from '../config/index.js';
+import { ensureLocalAceStepServer } from './local-acestep.js';
 
 let clientInstance: Client | null = null;
 let connectionPromise: Promise<Client> | null = null;
@@ -14,6 +15,7 @@ export async function getGradioClient(): Promise<Client> {
 
   connectionPromise = (async () => {
     try {
+      await ensureLocalAceStepServer(config.acestep.apiUrl);
       const client = await Client.connect(config.acestep.apiUrl, {
         events: ["data", "status"],
       });

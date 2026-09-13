@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useI18n } from '../context/I18nContext';
-import { trainingApi, getTrainingAudioUrl, TrainingSample, DatasetSettings } from '../services/api';
+import { trainingApi, getTrainingAudioUrl, TrainingSample, DatasetSettings, TrainingStatus } from '../services/api';
 
 type TrainingTab = 'dataset' | 'train' | 'export';
 
@@ -32,6 +32,7 @@ const TIME_SIGS = ['', '2', '3', '4', '6', 'N/A'];
 
 const DEVICES = ['auto', 'cuda', 'mps', 'xpu', 'cpu'];
 const BACKENDS = ['pt', 'vllm', 'mlx'];
+const TRAINING_UPLOAD_EXTENSIONS = ['wav', 'mp3', 'flac', 'ogg', 'opus', 'm4a', 'aac', 'mp4', 'webm'];
 
 // Pipeline step definitions
 const PIPELINE_STEPS = [
@@ -279,16 +280,32 @@ export const TrainingPanel: React.FC = () => {
     setIsDragOver(false);
     const files = Array.from(e.dataTransfer.files).filter((f: File) => {
       const ext = f.name.toLowerCase().split('.').pop();
-      return ['wav', 'mp3', 'flac', 'ogg', 'opus'].includes(ext || '');
+      return TRAINING_UPLOAD_EXTENSIONS.includes(ext || '');
     });
     if (files.length > 0) {
       setQueuedFiles(prev => [...prev, ...files]);
+      setUploadStatus('');
+    } else {
+      setUploadStatus(`Error: Unsupported file type. Allowed: ${TRAINING_UPLOAD_EXTENSIONS.map(ext => `.${ext}`).join(', ')}`);
     }
   }, []);
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
-      setQueuedFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+      const selectedFiles = Array.from(e.target.files);
+      const acceptedFiles = selectedFiles.filter((f: File) => {
+        const ext = f.name.toLowerCase().split('.').pop();
+        return TRAINING_UPLOAD_EXTENSIONS.includes(ext || '');
+      });
+      const rejectedCount = selectedFiles.length - acceptedFiles.length;
+      if (acceptedFiles.length > 0) {
+        setQueuedFiles(prev => [...prev, ...acceptedFiles]);
+      }
+      if (rejectedCount > 0) {
+        setUploadStatus(`Error: ${rejectedCount} file(s) were skipped. Allowed: ${TRAINING_UPLOAD_EXTENSIONS.map(ext => `.${ext}`).join(', ')}`);
+      } else {
+        setUploadStatus('');
+      }
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
   }, []);
@@ -554,7 +571,6 @@ export const TrainingPanel: React.FC = () => {
       markStep('train');
     } catch (error) {
       setTrainingProgress(`${t('error')}: ${error instanceof Error ? error.message : 'Failed'}`);
-    } finally {
       setIsTraining(false);
     }
   }, [token, trainingParams, t, markStep]);
@@ -564,11 +580,43 @@ export const TrainingPanel: React.FC = () => {
     try {
       const result = await trainingApi.stopTraining(token);
       setTrainingProgress(result.status as string);
-      setIsTraining(false);
     } catch (error) {
       console.error('Failed to stop training:', error);
     }
   }, [token]);
+
+  useEffect(() => {
+    if (!token || !isTraining) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const status: TrainingStatus = await trainingApi.getTrainingStatus(token);
+        if (cancelled) return;
+
+        setTrainingProgress(status.error ? `${status.status}: ${status.error}` : status.status);
+        setTrainingLog(status.trainingLog || '');
+        setTrainingMetrics(status.lossHistory || []);
+
+        if (!status.isTraining) {
+          setIsTraining(false);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setTrainingProgress(`Error: ${error instanceof Error ? error.message : 'Failed to poll training status'}`);
+          setIsTraining(false);
+        }
+      }
+    };
+
+    poll();
+    const interval = window.setInterval(poll, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [token, isTraining]);
 
   // === Export ===
   const handleExportLora = useCallback(async () => {
@@ -768,8 +816,8 @@ export const TrainingPanel: React.FC = () => {
               >
                 <Upload size={24} className={`mx-auto mb-2 ${isDragOver ? 'text-pink-400' : 'text-zinc-500'}`} />
                 <p className="text-xs text-zinc-400">Drop audio files here or click to browse</p>
-                <p className="text-[10px] text-zinc-600 mt-1">.wav, .mp3, .flac, .ogg, .opus</p>
-                <input ref={fileInputRef} type="file" multiple accept=".wav,.mp3,.flac,.ogg,.opus" onChange={handleFileSelect} className="hidden" />
+                <p className="text-[10px] text-zinc-600 mt-1">.wav, .mp3, .flac, .ogg, .opus, .m4a, .aac, .mp4, .webm</p>
+                <input ref={fileInputRef} type="file" multiple accept=".wav,.mp3,.flac,.ogg,.opus,.m4a,.aac,.mp4,.webm" onChange={handleFileSelect} className="hidden" />
               </div>
               {queuedFiles.length > 0 && (
                 <div className="mt-2 space-y-1 max-h-32 overflow-y-auto">

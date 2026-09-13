@@ -115,7 +115,8 @@ def format_input(
 
 def main():
     parser = argparse.ArgumentParser(description="Format lyrics and style using ACE-Step LLM")
-    parser.add_argument("--caption", type=str, required=True, help="Style/caption description")
+    parser.add_argument("--input-json", type=str, default="", help="Path to JSON file with formatter arguments")
+    parser.add_argument("--caption", type=str, default="", help="Style/caption description")
     parser.add_argument("--lyrics", type=str, default="", help="Lyrics text")
     parser.add_argument("--bpm", type=int, default=0, help="Optional BPM constraint")
     parser.add_argument("--duration", type=int, default=0, help="Optional duration constraint")
@@ -129,6 +130,25 @@ def main():
     parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     args = parser.parse_args()
+
+    if args.input_json:
+        with open(args.input_json, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+
+        args.caption = payload.get("caption", args.caption)
+        args.lyrics = payload.get("lyrics", args.lyrics)
+        args.bpm = int(payload.get("bpm", args.bpm) or 0)
+        args.duration = int(payload.get("duration", args.duration) or 0)
+        args.key_scale = payload.get("key_scale", args.key_scale)
+        args.time_signature = payload.get("time_signature", args.time_signature)
+        args.temperature = float(payload.get("temperature", args.temperature))
+        args.top_k = int(payload.get("top_k", args.top_k) or 0)
+        args.top_p = float(payload.get("top_p", args.top_p))
+        args.lm_model = payload.get("lm_model", args.lm_model)
+        args.lm_backend = payload.get("lm_backend", args.lm_backend)
+
+    if not args.caption:
+        raise ValueError("--caption is required")
 
     try:
         start_time = time.time()

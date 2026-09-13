@@ -21,22 +21,13 @@ function getAudioDuration(filePath: string): number {
 import { fileURLToPath } from 'url';
 import { config } from '../config/index.js';
 import { getGradioClient, resetGradioClient, isGradioAvailable } from './gradio-client.js';
+import { resolveAceStepDir } from './local-acestep.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const AUDIO_DIR = path.join(__dirname, '../../public/audio');
 
 const ACESTEP_API = config.acestep.apiUrl;
-
-// Resolve ACE-Step path (from env or default relative path)
-function resolveAceStepPath(): string {
-  const envPath = process.env.ACESTEP_PATH;
-  if (envPath) {
-    return path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
-  }
-  // Default: sibling directory (server/src/services -> ../../../ACE-Step-1.5 = app/ACE-Step-1.5)
-  return path.resolve(__dirname, '../../../ACE-Step-1.5');
-}
 
 // Resolve Python path cross-platform (supports venv and portable installations)
 export function resolvePythonPath(baseDir: string): string {
@@ -72,7 +63,7 @@ export function resolvePythonPath(baseDir: string): string {
   return path.join(baseDir, 'env', 'bin', 'python');
 }
 
-const ACESTEP_DIR = resolveAceStepPath();
+const ACESTEP_DIR = resolveAceStepDir();
 const SCRIPTS_DIR = path.join(__dirname, '../../scripts');
 const PYTHON_SCRIPT = path.join(SCRIPTS_DIR, 'simple_generate.py');
 

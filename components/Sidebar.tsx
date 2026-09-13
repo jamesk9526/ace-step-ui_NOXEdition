@@ -42,15 +42,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar */}
       <div className={`
-        flex flex-col h-full bg-white dark:bg-suno-sidebar border-r border-zinc-200 dark:border-white/5 flex-shrink-0 py-4 overflow-y-auto scrollbar-hide transition-all duration-300
-        fixed left-0 top-0 z-50 md:relative
-        ${isOpen ? 'w-[200px]' : 'w-[72px]'}
+        flex flex-col bg-gradient-to-b from-black via-zinc-950 to-black dark:from-black dark:via-zinc-950 dark:to-black border-r border-zinc-800 dark:border-zinc-800 flex-shrink-0 py-4 overflow-y-auto scrollbar-hide transition-all duration-300 shadow-2xl md:shadow-none
+        fixed left-0 top-0 bottom-0 z-50 w-[220px]
+        ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+        md:relative md:top-auto md:bottom-auto md:translate-x-0
+        ${isOpen ? 'md:w-[220px]' : 'md:w-[72px]'}
       `}>
       {/* Logo & Brand */}
       <div className="px-3 mb-8 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div
-            className="w-10 h-10 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center cursor-pointer shadow-lg hover:scale-105 transition-transform flex-shrink-0"
+            className="w-10 h-10 rounded-full bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center cursor-pointer shadow-lg hover:scale-105 transition-transform flex-shrink-0"
             onClick={() => onNavigate('create')}
             title={t('aceStepUI')}
           >
@@ -61,7 +63,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </svg>
           </div>
           {isOpen && (
-            <span className="text-lg font-bold text-zinc-900 dark:text-white whitespace-nowrap">ACE Step</span>
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 uppercase tracking-wider">Music</span>
+              <span className="text-sm font-bold text-zinc-900 dark:text-white whitespace-nowrap leading-tight">OTunes</span>
+            </div>
           )}
         </div>
         {/* Collapse/Expand Button */}
@@ -124,8 +129,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <button
             onClick={onToggleTheme}
             className={`
-              w-full rounded-xl flex items-center gap-3 transition-all duration-200 text-zinc-500 dark:text-zinc-400 hover:text-black dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/5
-              ${isOpen ? 'px-3 py-2.5 justify-start' : 'aspect-square justify-center'}
+              w-full rounded-lg flex items-center gap-3 transition-all duration-200 text-zinc-300 hover:text-white hover:bg-white/10
+              ${isOpen ? 'px-3 py-3 justify-start' : 'aspect-square justify-center'}
             `}
             title={theme === 'dark' ? t('lightMode') : t('darkMode')}
           >
@@ -143,12 +148,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 onClick={onOpenSettings}
                 className={`
-                  w-full rounded-xl flex items-center gap-3 transition-all duration-200 text-zinc-500 dark:text-zinc-400 hover:text-black dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/5
-                  ${isOpen ? 'px-3 py-2.5 justify-start' : 'aspect-square justify-center'}
+                  w-full rounded-lg flex items-center gap-3 transition-all duration-200 text-zinc-300 hover:text-white hover:bg-white/10
+                  ${isOpen ? 'px-3 py-3 justify-start' : 'aspect-square justify-center'}
                 `}
                 title={`${user.username} - ${t('settings')}`}
               >
-                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold border border-white/20 overflow-hidden flex-shrink-0">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-green-400 to-emerald-600 flex items-center justify-center text-white text-xs font-bold border border-white/20 overflow-hidden flex-shrink-0">
                   {user.avatar_url ? (
                     <img src={user.avatar_url} alt={user.username} className="w-full h-full object-cover" />
                   ) : (
@@ -165,8 +170,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <button
                 onClick={onLogout}
                 className={`
-                  w-full rounded-xl flex items-center gap-3 transition-all duration-200 text-zinc-500 hover:text-red-500 hover:bg-red-500/10
-                  ${isOpen ? 'px-3 py-2.5 justify-start' : 'aspect-square justify-center'}
+                  w-full rounded-lg flex items-center gap-3 transition-all duration-200 text-zinc-300 hover:text-white hover:bg-red-500/10 hover:text-red-400
+                  ${isOpen ? 'px-3 py-3 justify-start' : 'aspect-square justify-center'}
                 `}
                 title={t('signOut')}
               >
@@ -180,8 +185,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               onClick={onLogin}
               className={`
-                w-full rounded-xl flex items-center gap-3 transition-all duration-200 text-zinc-500 dark:text-zinc-400 hover:text-pink-500 hover:bg-zinc-100 dark:hover:bg-white/5
-                ${isOpen ? 'px-3 py-2.5 justify-start' : 'aspect-square justify-center'}
+                w-full rounded-lg flex items-center gap-3 transition-all duration-200 text-white bg-green-500 hover:bg-green-400 shadow-lg font-medium
+                ${isOpen ? 'px-3 py-3 justify-start' : 'aspect-square justify-center'}
               `}
               title={t('signIn')}
             >
@@ -210,13 +215,15 @@ const NavItem: React.FC<NavItemProps> = ({ icon, label, active, onClick, isExpan
   <button
     onClick={onClick}
     className={`
-      w-full rounded-xl flex items-center gap-3 transition-all duration-200 group relative overflow-hidden
-      ${isExpanded ? 'px-3 py-2.5 justify-start' : 'aspect-square justify-center'}
-      ${active ? 'bg-zinc-100 dark:bg-white/10 text-black dark:text-white' : 'text-zinc-500 hover:text-black dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-white/5'}
+      w-full rounded-lg flex items-center gap-3 transition-all duration-200 group relative overflow-hidden font-medium
+      ${isExpanded ? 'px-3 py-3 justify-start' : 'aspect-square justify-center'}
+      ${active 
+        ? 'bg-green-500 text-white shadow-lg hover:bg-green-400' 
+        : 'text-zinc-300 hover:text-white hover:bg-white/10'
+      }
     `}
     title={label}
   >
-    {active && <div className="absolute left-0 top-1/2 -translate-y-1/2 h-8 w-1 bg-pink-500 rounded-r-full"></div>}
     <div className="flex-shrink-0">{icon}</div>
     {isExpanded && (
       <span className="text-sm font-medium whitespace-nowrap">{label}</span>

@@ -1,8 +1,8 @@
 import { Router, Request, Response } from 'express';
 import { authMiddleware, AuthenticatedRequest } from '../middleware/auth.js';
-import { getGradioClient } from '../services/gradio-client.js';
 import { config } from '../config/index.js';
 import { resolvePythonPath } from '../services/acestep.js';
+import { ensureLocalAceStepServer, resolveAceStepDir } from '../services/local-acestep.js';
 import multer from 'multer';
 import path from 'path';
 import { existsSync, readdirSync, statSync, readFileSync } from 'fs';
@@ -11,42 +11,92 @@ import { execSync, spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 
 const router = Router();
+type AceStepWrappedResponse<T> = {
+  data: T | null;
+  code?: number;
+  error?: string | null;
+};
 
-// --- Audio upload via multer disk storage ---
-const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.opus'];
+type AceStepDatasetSample = {
+  index?: number;
+  filename?: string;
+  audio_path?: string | null;
+  caption?: string;
+  genre?: string;
+  prompt_override?: string | null;
+  lyrics?: string;
+  bpm?: number | null;
+  keyscale?: string;
+  timesignature?: string;
+  duration?: number | null;
+  language?: string;
+  is_instrumental?: boolean;
+  raw_lyrics?: string;
+  labeled?: boolean;
+};
 
-const audioStorage = multer.diskStorage({
-  destination: async (_req: Request, _file, cb) => {
-    const datasetName = (_req.body?.datasetName as string) || 'default';
-    const dest = path.join(config.datasets.uploadsDir, datasetName);
-    try {
-      await mkdir(dest, { recursive: true });
-      cb(null, dest);
-    } catch (err) {
-      cb(err as Error, dest);
-    }
-  },
-  filename: (_req, file, cb) => {
-    // Preserve original filename but ensure uniqueness
-    const ext = path.extname(file.originalname).toLowerCase();
-    const base = path.basename(file.originalname, ext);
-    const safeName = base.replace(/[^a-zA-Z0-9_\-. ]/g, '_');
-    cb(null, `${safeName}${ext}`);
-  },
-});
+type AceStepDatasetLoadResponse = {
+  message?: string;
+  dataset_name?: string;
+  num_samples?: number;
+  labeled_count?: number;
+  samples?: AceStepDatasetSample[];
+};
+
+const DATAFRAME_HEADERS = ['#', 'Filename', 'Duration', 'Lyrics', 'Labeled', 'BPM', 'Key', 'Caption'];
+
+const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg', '.opus', '.m4a', '.aac', '.mp4', '.webm'];
+const AUDIO_MIME_TYPES = [
+  'audio/mpeg',
+  'audio/mp3',
+  'audio/mpeg3',
+  'audio/x-mpeg-3',
+  'audio/wav',
+  'audio/x-wav',
+  'audio/flac',
+  'audio/x-flac',
+  'audio/ogg',
+  'audio/opus',
+  'audio/mp4',
+  'audio/x-m4a',
+  'audio/aac',
+  'audio/webm',
+  'video/mp4',
+];
 
 const audioUpload = multer({
-  storage: audioStorage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: 100 * 1024 * 1024 }, // 100MB per file
   fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    if (AUDIO_EXTENSIONS.includes(ext)) {
+    if (AUDIO_EXTENSIONS.includes(ext) || AUDIO_MIME_TYPES.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error(`Unsupported file type: ${ext}. Allowed: ${AUDIO_EXTENSIONS.join(', ')}`));
+      cb(new Error(`Unsupported file type: ${ext || file.mimetype}. Allowed: ${AUDIO_EXTENSIONS.join(', ')}`));
     }
   },
 });
+
+function sanitizeUploadFilename(filename: string): string {
+  const ext = path.extname(filename).toLowerCase();
+  const base = path.basename(filename, ext);
+  const safeBase = base.replace(/[^a-zA-Z0-9_\-. ]/g, '_').trim() || 'audio';
+  return `${safeBase}${ext}`;
+}
+
+function getUniqueUploadPath(destDir: string, originalName: string): string {
+  const ext = path.extname(originalName).toLowerCase();
+  const base = path.basename(originalName, ext);
+  let candidate = path.join(destDir, `${base}${ext}`);
+  let suffix = 1;
+
+  while (existsSync(candidate)) {
+    candidate = path.join(destDir, `${base}-${suffix}${ext}`);
+    suffix += 1;
+  }
+
+  return candidate;
+}
 
 // Get audio duration via ffprobe
 function getAudioDuration(filePath: string): number {
@@ -64,17 +114,164 @@ function getAudioDuration(filePath: string): number {
 
 // Resolve ACE-Step base directory
 function getAceStepDir(): string {
-  const envPath = process.env.ACESTEP_PATH;
-  if (envPath) {
-    return path.isAbsolute(envPath) ? envPath : path.resolve(process.cwd(), envPath);
+  return resolveAceStepDir();
+}
+
+function resolveDatasetJsonPath(datasetPath: string): string {
+  const trimmed = datasetPath.trim();
+  if (path.isAbsolute(trimmed)) {
+    return path.normalize(trimmed);
   }
-  return path.resolve(config.datasets.dir, '..');
+
+  const normalized = trimmed.replace(/\\/g, '/').replace(/^\.\//, '');
+  if (normalized.startsWith('datasets/')) {
+    return path.join(config.datasets.dir, normalized.slice('datasets/'.length));
+  }
+
+  return path.resolve(getAceStepDir(), trimmed);
+}
+
+function getAceStepApiUrl(pathname: string): string {
+  return new URL(pathname, config.acestep.apiUrl).toString();
+}
+
+async function aceStepApiRequest<T>(
+  pathname: string,
+  init: RequestInit = {},
+  timeoutMs = 30_000,
+): Promise<T> {
+  await ensureLocalAceStepServer(config.acestep.apiUrl);
+
+  const headers = new Headers(init.headers ?? {});
+  if (init.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+
+  const response = await fetch(getAceStepApiUrl(pathname), {
+    ...init,
+    headers,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+
+  const payload = await response.json().catch(() => null) as AceStepWrappedResponse<T> | null;
+
+  if (!response.ok) {
+    const errorMessage = payload?.error || (payload?.data as any)?.message || `ACE-Step API request failed: ${response.status}`;
+    throw new Error(String(errorMessage));
+  }
+
+  if (!payload) {
+    throw new Error('ACE-Step API returned an empty response');
+  }
+
+  if ((payload.code && payload.code >= 400) || payload.error) {
+    throw new Error(payload.error || `ACE-Step API returned code ${payload.code}`);
+  }
+
+  if (payload.data == null) {
+    throw new Error('ACE-Step API returned no data');
+  }
+
+  return payload.data;
+}
+
+function readDatasetSettingsFromJson(datasetPath: string): {
+  datasetName: string;
+  customTag: string;
+  tagPosition: 'prepend' | 'append' | 'replace';
+  allInstrumental: boolean;
+  genreRatio: number;
+} {
+  const defaults = {
+    datasetName: path.basename(datasetPath, path.extname(datasetPath)),
+    customTag: '',
+    tagPosition: 'replace' as const,
+    allInstrumental: true,
+    genreRatio: 0,
+  };
+
+  try {
+    const parsed = JSON.parse(readFileSync(datasetPath, 'utf-8')) as {
+      metadata?: {
+        name?: string;
+        custom_tag?: string;
+        tag_position?: 'prepend' | 'append' | 'replace';
+        all_instrumental?: boolean;
+        genre_ratio?: number;
+      };
+    };
+    return {
+      datasetName: parsed.metadata?.name || defaults.datasetName,
+      customTag: parsed.metadata?.custom_tag || '',
+      tagPosition: parsed.metadata?.tag_position || defaults.tagPosition,
+      allInstrumental: parsed.metadata?.all_instrumental ?? defaults.allInstrumental,
+      genreRatio: parsed.metadata?.genre_ratio ?? defaults.genreRatio,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function toTrainingSample(sample: AceStepDatasetSample | undefined, index = 0) {
+  if (!sample) return null;
+  return {
+    index: sample.index ?? index,
+    audio: sample.audio_path || null,
+    filename: sample.filename || '',
+    caption: sample.caption || '',
+    genre: sample.genre || '',
+    promptOverride: sample.prompt_override || 'Use Global Ratio',
+    lyrics: sample.lyrics || '',
+    bpm: sample.bpm ?? 0,
+    key: sample.keyscale || '',
+    timeSignature: sample.timesignature || '',
+    duration: sample.duration ?? 0,
+    language: sample.language || 'unknown',
+    instrumental: sample.is_instrumental ?? false,
+    rawLyrics: sample.raw_lyrics || '',
+  };
+}
+
+function buildDataframeFromSamples(samples: AceStepDatasetSample[]) {
+  return {
+    headers: DATAFRAME_HEADERS,
+    data: samples.map((sample, index) => ([
+      index + 1,
+      sample.filename || '',
+      `${sample.duration ?? 0}s`,
+      sample.lyrics || '',
+      sample.labeled ? '✅' : '❌',
+      sample.bpm ?? '',
+      sample.keyscale || '',
+      sample.caption || '',
+    ])),
+  };
+}
+
+function formatDatasetResponse(payload: AceStepDatasetLoadResponse, datasetPath: string) {
+  const samples = payload.samples || [];
+  const settings = readDatasetSettingsFromJson(datasetPath);
+  return {
+    status: payload.message || `Loaded ${samples.length} samples`,
+    dataframe: buildDataframeFromSamples(samples),
+    sampleCount: payload.num_samples ?? samples.length,
+    sample: toTrainingSample(samples[0], 0),
+    settings,
+  };
 }
 
 // ================== NEW ROUTES ==================
 
 // POST /api/training/upload-audio — Upload audio files for a dataset
-router.post('/upload-audio', authMiddleware, audioUpload.array('audio', 50), async (req: AuthenticatedRequest, res: Response) => {
+router.post('/upload-audio', authMiddleware, (req: AuthenticatedRequest, res: Response, next) => {
+  audioUpload.array('audio', 50)(req, res, (err: any) => {
+    if (err) {
+      res.status(400).json({ error: err.message || 'Invalid file upload' });
+      return;
+    }
+    next();
+  });
+}, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const files = req.files as Express.Multer.File[];
     if (!files || files.length === 0) {
@@ -84,16 +281,26 @@ router.post('/upload-audio', authMiddleware, audioUpload.array('audio', 50), asy
 
     const datasetName = (req.body?.datasetName as string) || 'default';
     const uploadDir = path.join(config.datasets.uploadsDir, datasetName);
+    await mkdir(uploadDir, { recursive: true });
+
+    const savedFiles = [];
+    for (const file of files) {
+      const safeName = sanitizeUploadFilename(file.originalname);
+      const destination = getUniqueUploadPath(uploadDir, safeName);
+      await writeFile(destination, file.buffer);
+
+      savedFiles.push({
+        filename: path.basename(destination),
+        originalName: file.originalname,
+        size: file.size,
+        path: destination,
+      });
+    }
 
     res.json({
-      files: files.map(f => ({
-        filename: f.filename,
-        originalName: f.originalname,
-        size: f.size,
-        path: f.path,
-      })),
+      files: savedFiles,
       uploadDir,
-      count: files.length,
+      count: savedFiles.length,
     });
   } catch (error) {
     console.error('[Training] Upload audio error:', error);
@@ -182,55 +389,29 @@ router.post('/build-dataset', authMiddleware, async (req: AuthenticatedRequest, 
     const jsonPath = path.join(config.datasets.dir, `${datasetName}.json`);
     await writeFile(jsonPath, JSON.stringify(dataset, null, 2), 'utf-8');
 
-    // Now load into Gradio state via the existing endpoint
+    // Load the dataset into the ACE-Step API server state.
     try {
-      const client = await getGradioClient();
-      const result = await client.predict('/load_existing_dataset_for_preprocess', [jsonPath]);
-      const data = result.data as unknown[];
-
+      const payload = await aceStepApiRequest<AceStepDatasetLoadResponse>('/v1/dataset/load', {
+        method: 'POST',
+        body: JSON.stringify({ dataset_path: jsonPath }),
+      });
       res.json({
-        status: data[0],
-        dataframe: data[1],
-        sampleCount: samples.length,
-        sample: {
-          index: data[2],
-          audio: data[3],
-          filename: data[4],
-          caption: data[5],
-          genre: data[6],
-          promptOverride: data[7],
-          lyrics: data[8],
-          bpm: data[9],
-          key: data[10],
-          timeSignature: data[11],
-          duration: data[12],
-          language: data[13],
-          instrumental: data[14],
-          rawLyrics: data[15],
-        },
-        settings: {
-          datasetName: data[16],
-          customTag: data[17],
-          tagPosition: data[18],
-          allInstrumental: data[19],
-          genreRatio: data[20],
-        },
+        ...formatDatasetResponse(payload, jsonPath),
         datasetPath: jsonPath,
       });
-    } catch (gradioError) {
-      // Gradio may not be running — still return dataset info
-      console.warn('[Training] Gradio load failed, returning dataset JSON only:', gradioError);
+    } catch (apiError) {
+      console.warn('[Training] ACE-Step dataset load failed, returning dataset JSON only:', apiError);
       res.json({
-        status: `Dataset saved (${samples.length} samples). Gradio not available for live preview.`,
-        dataframe: null,
+        status: `Dataset saved (${samples.length} samples). ACE-Step dataset API not available for live preview.`,
+        dataframe: buildDataframeFromSamples(samples),
         sampleCount: samples.length,
         sample: samples.length > 0 ? {
           index: 0,
-          audio: null,
+          audio: samples[0].audio_path,
           filename: samples[0].filename,
           caption: samples[0].caption,
           genre: samples[0].genre,
-          promptOverride: null,
+          promptOverride: samples[0].prompt_override ?? 'Use Global Ratio',
           lyrics: samples[0].lyrics,
           bpm: samples[0].bpm,
           key: samples[0].keyscale,
@@ -433,11 +614,6 @@ router.post('/scan-directory', authMiddleware, async (req: AuthenticatedRequest,
   }
 });
 
-// POST /api/training/auto-label — Auto-label dataset samples
-// NOTE: Auto-labeling requires the DIT model + LLM to be loaded in Gradio.
-// This endpoint attempts to call the Gradio handler. If the Gradio app does not
-// expose auto_label_all as a named API, this will fail and the user should use
-// the Gradio UI directly.
 router.post('/auto-label', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
@@ -447,37 +623,27 @@ router.post('/auto-label', authMiddleware, async (req: AuthenticatedRequest, res
       onlyUnlabeled = false,
     } = req.body;
 
-    // auto_label_all is a lambda-wrapped handler in Gradio, so it may not be accessible
-    // by name. We try the likely endpoint name; if it fails, return a helpful message.
-    const client = await getGradioClient();
-    try {
-      const result = await client.predict('/auto_label_all', [
-        skipMetas,
-        formatLyrics,
-        transcribeLyrics,
-        onlyUnlabeled,
-      ]);
-      const data = result.data as unknown[];
-      res.json({
-        dataframe: data[0],
-        status: data[1],
-      });
-    } catch (gradioError) {
-      // Lambda endpoints aren't named — suggest using Gradio UI
-      res.status(501).json({
-        error: 'Auto-labeling requires the Gradio UI. The model must be initialized and the dataset loaded in the Gradio training tab.',
-        hint: 'Use the Gradio UI at the ACE-Step server URL to auto-label your dataset, then reload it here.',
-      });
-    }
+    const payload = await aceStepApiRequest<{ message?: string; samples?: AceStepDatasetSample[] }>('/v1/dataset/auto_label', {
+      method: 'POST',
+      body: JSON.stringify({
+        skip_metas: skipMetas,
+        format_lyrics: formatLyrics,
+        transcribe_lyrics: transcribeLyrics,
+        only_unlabeled: onlyUnlabeled,
+      }),
+    }, 10 * 60_000);
+
+    const samples = payload.samples || [];
+    res.json({
+      dataframe: buildDataframeFromSamples(samples),
+      status: payload.message || 'Auto-label completed',
+    });
   } catch (error) {
     console.error('[Training] Auto-label error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Auto-label failed' });
   }
 });
 
-// POST /api/training/init-model — Initialize or change model for training
-// NOTE: Model initialization requires the Gradio app. This endpoint attempts to
-// call the init_service_wrapper. Since it's a lambda, this may not be accessible.
 router.post('/init-model', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const {
@@ -494,34 +660,36 @@ router.post('/init-model', authMiddleware, async (req: AuthenticatedRequest, res
       quantization = false,
     } = req.body;
 
-    const client = await getGradioClient();
-    try {
-      // Try calling by function name (may work if Gradio auto-names it)
-      const result = await client.predict('/init_service_wrapper', [
-        checkpoint ?? '',
-        configPath ?? '',
-        device,
-        initLlm,
-        lmModelPath,
-        backend,
-        useFlashAttention,
-        offloadToCpu,
-        offloadDitToCpu,
-        compileModel,
-        quantization,
-      ]);
-      const data = result.data as unknown[];
-      res.json({
-        status: data[0],
-        modelReady: !!data[1],
-      });
-    } catch (gradioError) {
-      // Lambda endpoints aren't named — suggest using Gradio UI
-      res.status(501).json({
-        error: 'Model initialization requires the Gradio UI.',
-        hint: 'Initialize the model in the ACE-Step Gradio UI service configuration section, then return here for training.',
-      });
-    }
+    const model = (configPath || checkpoint || '').trim() || undefined;
+    const payload = await aceStepApiRequest<{
+      message?: string;
+      loaded_model?: string;
+      loaded_lm_model?: string;
+      llm_initialized?: boolean;
+    }>('/v1/init', {
+      method: 'POST',
+      body: JSON.stringify({
+        model,
+        init_llm: initLlm,
+        lm_model_path: lmModelPath || undefined,
+      }),
+    }, 5 * 60_000);
+
+    const notes = [
+      payload.message || 'Model initialization completed',
+      device && device !== 'auto' ? `Requested device: ${device}` : '',
+      backend ? `Requested backend: ${backend}` : '',
+      useFlashAttention ? 'Requested flash attention' : '',
+      offloadToCpu ? 'Requested CPU offload' : '',
+      offloadDitToCpu ? 'Requested DiT CPU offload' : '',
+      compileModel ? 'Requested compile model' : '',
+      quantization ? 'Requested quantization' : '',
+    ].filter(Boolean);
+
+    res.json({
+      status: notes.join('\n'),
+      modelReady: !!payload.loaded_model,
+    });
   } catch (error) {
     console.error('[Training] Init model error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Model init failed' });
@@ -613,41 +781,17 @@ router.post('/load-dataset', authMiddleware, async (req: AuthenticatedRequest, r
       return;
     }
 
-    const client = await getGradioClient();
-    const result = await client.predict('/load_existing_dataset_for_preprocess', [datasetPath]);
-    const data = result.data as unknown[];
+    const resolvedDatasetPath = resolveDatasetJsonPath(datasetPath);
+    if (!existsSync(resolvedDatasetPath)) {
+      res.status(404).json({ error: `Dataset file not found: ${resolvedDatasetPath}` });
+      return;
+    }
 
-    // Returns: [status, dataframe, sampleIdx, audioPreview, filename, caption, genre,
-    //           promptOverride, lyrics, bpm, key, timesig, duration, language, instrumental,
-    //           rawLyrics, datasetName, customTag, tagPosition, allInstrumental, genreRatio]
-    res.json({
-      status: data[0],
-      dataframe: data[1],
-      sampleCount: Array.isArray((data[1] as any)?.data) ? (data[1] as any).data.length : 0,
-      sample: {
-        index: data[2],
-        audio: data[3],
-        filename: data[4],
-        caption: data[5],
-        genre: data[6],
-        promptOverride: data[7],
-        lyrics: data[8],
-        bpm: data[9],
-        key: data[10],
-        timeSignature: data[11],
-        duration: data[12],
-        language: data[13],
-        instrumental: data[14],
-        rawLyrics: data[15],
-      },
-      settings: {
-        datasetName: data[16],
-        customTag: data[17],
-        tagPosition: data[18],
-        allInstrumental: data[19],
-        genreRatio: data[20],
-      },
+    const payload = await aceStepApiRequest<AceStepDatasetLoadResponse>('/v1/dataset/load', {
+      method: 'POST',
+      body: JSON.stringify({ dataset_path: resolvedDatasetPath }),
     });
+    res.json(formatDatasetResponse(payload, resolvedDatasetPath));
   } catch (error) {
     console.error('[Training] Load dataset error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to load dataset' });
@@ -658,27 +802,8 @@ router.post('/load-dataset', authMiddleware, async (req: AuthenticatedRequest, r
 router.get('/sample-preview', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const idx = parseInt(req.query.idx as string) || 0;
-
-    const client = await getGradioClient();
-    const result = await client.predict('/get_sample_preview', [idx]);
-    const data = result.data as unknown[];
-
-    // Returns: [audio, filename, caption, genre, promptOverride, lyrics, bpm, key, timesig, duration, language, instrumental, rawLyrics]
-    res.json({
-      audio: data[0],
-      filename: data[1],
-      caption: data[2],
-      genre: data[3],
-      promptOverride: data[4],
-      lyrics: data[5],
-      bpm: data[6],
-      key: data[7],
-      timeSignature: data[8],
-      duration: data[9],
-      language: data[10],
-      instrumental: data[11],
-      rawLyrics: data[12],
-    });
+    const sample = await aceStepApiRequest<AceStepDatasetSample>(`/v1/dataset/sample/${idx}`);
+    res.json(toTrainingSample(sample, idx));
   } catch (error) {
     console.error('[Training] Sample preview error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to get sample preview' });
@@ -689,26 +814,27 @@ router.get('/sample-preview', authMiddleware, async (req: AuthenticatedRequest, 
 router.post('/save-sample', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { sampleIdx, caption, genre, promptOverride, lyrics, bpm, key, timeSignature, language, instrumental } = req.body;
+    const idx = sampleIdx ?? 0;
+    const payload = await aceStepApiRequest<{ message?: string }>(`/v1/dataset/sample/${idx}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        sample_idx: idx,
+        caption: caption ?? '',
+        genre: genre ?? '',
+        prompt_override: promptOverride ?? 'Use Global Ratio',
+        lyrics: lyrics ?? '',
+        bpm: bpm ?? 120,
+        keyscale: key ?? '',
+        timesignature: timeSignature ?? '',
+        language: language ?? 'instrumental',
+        is_instrumental: instrumental ?? true,
+      }),
+    });
 
-    const client = await getGradioClient();
-    const result = await client.predict('/save_sample_edit', [
-      sampleIdx ?? 0,
-      caption ?? '',
-      genre ?? '',
-      promptOverride ?? 'Use Global Ratio',
-      lyrics ?? '',
-      bpm ?? 120,
-      key ?? '',
-      timeSignature ?? '',
-      language ?? 'instrumental',
-      instrumental ?? true,
-    ]);
-    const data = result.data as unknown[];
-
-    // Returns: [dataframe, editStatus]
+    const samplesPayload = await aceStepApiRequest<{ samples?: AceStepDatasetSample[] }>('/v1/dataset/samples');
     res.json({
-      dataframe: data[0],
-      status: data[1],
+      dataframe: buildDataframeFromSamples(samplesPayload.samples || []),
+      status: payload.message || 'Sample updated',
     });
   } catch (error) {
     console.error('[Training] Save sample error:', error);
@@ -740,21 +866,12 @@ router.post('/save-dataset', authMiddleware, async (req: AuthenticatedRequest, r
     if (allInstrumental !== undefined) body.all_instrumental = allInstrumental;
     if (genreRatio !== undefined) body.genre_ratio = genreRatio;
 
-    const apiRes = await fetch(`${apiUrl}/v1/dataset/save`, {
+    const data = await aceStepApiRequest<{ message?: string; save_path?: string }>(new URL('/v1/dataset/save', apiUrl).pathname, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
     });
-
-    if (!apiRes.ok) {
-      const err = await apiRes.json().catch(() => ({})) as any;
-      throw new Error(err?.detail || err?.error || `Save failed: ${apiRes.status}`);
-    }
-
-    const data = await apiRes.json() as any;
     res.json({
-      status: data.status ?? 'Saved',
+      status: data.message ?? 'Saved',
       path: data.save_path ?? resolvedPath,
     });
   } catch (error) {
@@ -767,14 +884,13 @@ router.post('/save-dataset', authMiddleware, async (req: AuthenticatedRequest, r
 router.post('/load-tensors', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { tensorDir } = req.body;
-
-    const client = await getGradioClient();
-    const result = await client.predict('/load_training_dataset', [
-      tensorDir ?? './datasets/preprocessed_tensors',
-    ]);
-    const data = result.data as unknown[];
-
-    res.json({ status: data[0] });
+    const data = await aceStepApiRequest<{ message?: string }>('/v1/training/load_tensor_info', {
+      method: 'POST',
+      body: JSON.stringify({
+        tensor_dir: tensorDir ?? './datasets/preprocessed_tensors',
+      }),
+    });
+    res.json({ status: data.message ?? 'Loaded training dataset' });
   } catch (error) {
     console.error('[Training] Load tensors error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to load training dataset' });
@@ -790,29 +906,29 @@ router.post('/start', authMiddleware, async (req: AuthenticatedRequest, res: Res
       shift, seed, outputDir, resumeCheckpoint,
     } = req.body;
 
-    const client = await getGradioClient();
-    const result = await client.predict('/training_wrapper', [
-      tensorDir ?? './datasets/preprocessed_tensors',
-      rank ?? 64,
-      alpha ?? 128,
-      dropout ?? 0.1,
-      learningRate ?? 0.0003,
-      epochs ?? 1000,
-      batchSize ?? 1,
-      gradientAccumulation ?? 1,
-      saveEvery ?? 200,
-      shift ?? 3.0,
-      seed ?? 42,
-      outputDir ?? './lora_output',
-      resumeCheckpoint ?? null,
-    ]);
-    const data = result.data as unknown[];
+    const data = await aceStepApiRequest<Record<string, unknown>>('/v1/training/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        tensor_dir: tensorDir ?? './datasets/preprocessed_tensors',
+        lora_rank: rank ?? 64,
+        lora_alpha: alpha ?? 128,
+        lora_dropout: dropout ?? 0.1,
+        learning_rate: learningRate ?? 0.0003,
+        train_epochs: epochs ?? 1000,
+        train_batch_size: batchSize ?? 1,
+        gradient_accumulation: gradientAccumulation ?? 1,
+        save_every_n_epochs: saveEvery ?? 200,
+        training_shift: shift ?? 3.0,
+        training_seed: seed ?? 42,
+        lora_output_dir: outputDir ?? './lora_output',
+        resume_checkpoint: resumeCheckpoint ?? null,
+      }),
+    }, 60_000);
 
-    // Returns: [trainingProgress, trainingLog, lineplotData]
     res.json({
-      progress: data[0],
-      log: data[1],
-      metrics: data[2],
+      progress: String(data.message ?? 'Training started'),
+      log: '',
+      metrics: data,
     });
   } catch (error) {
     console.error('[Training] Start training error:', error);
@@ -823,14 +939,60 @@ router.post('/start', authMiddleware, async (req: AuthenticatedRequest, res: Res
 // POST /api/training/stop — Stop current training
 router.post('/stop', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
   try {
-    const client = await getGradioClient();
-    const result = await client.predict('/stop_training', []);
-    const data = result.data as unknown[];
-
-    res.json({ status: data[0] });
+    const data = await aceStepApiRequest<{ message?: string }>('/v1/training/stop', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    res.json({ status: data.message ?? 'Stopping training...' });
   } catch (error) {
     console.error('[Training] Stop training error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to stop training' });
+  }
+});
+
+// GET /api/training/status — Poll current training status
+router.get('/status', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+  try {
+    const data = await aceStepApiRequest<{
+      is_training?: boolean;
+      should_stop?: boolean;
+      current_step?: number;
+      current_loss?: number | null;
+      status?: string;
+      config?: Record<string, unknown>;
+      tensor_dir?: string;
+      loss_history?: Array<{ step?: number; loss?: number }>;
+      tensorboard_url?: string | null;
+      tensorboard_logdir?: string | null;
+      training_log?: string;
+      start_time?: number | null;
+      current_epoch?: number;
+      steps_per_second?: number;
+      estimated_time_remaining?: number;
+      error?: string | null;
+    }>('/v1/training/status');
+
+    res.json({
+      isTraining: data.is_training ?? false,
+      shouldStop: data.should_stop ?? false,
+      currentStep: data.current_step ?? 0,
+      currentLoss: data.current_loss ?? null,
+      status: data.status ?? 'Idle',
+      config: data.config ?? {},
+      tensorDir: data.tensor_dir ?? '',
+      lossHistory: data.loss_history ?? [],
+      tensorboardUrl: data.tensorboard_url ?? null,
+      tensorboardLogdir: data.tensorboard_logdir ?? null,
+      trainingLog: data.training_log ?? '',
+      startTime: data.start_time ?? null,
+      currentEpoch: data.current_epoch ?? 0,
+      stepsPerSecond: data.steps_per_second ?? 0,
+      estimatedTimeRemaining: data.estimated_time_remaining ?? 0,
+      error: data.error ?? null,
+    });
+  } catch (error) {
+    console.error('[Training] Status error:', error);
+    res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to fetch training status' });
   }
 });
 
@@ -838,15 +1000,14 @@ router.post('/stop', authMiddleware, async (_req: AuthenticatedRequest, res: Res
 router.post('/export', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { exportPath, loraOutputDir } = req.body;
-
-    const client = await getGradioClient();
-    const result = await client.predict('/export_lora', [
-      exportPath ?? './lora_output/final_lora',
-      loraOutputDir ?? './lora_output',
-    ]);
-    const data = result.data as unknown[];
-
-    res.json({ status: data[0] });
+    const data = await aceStepApiRequest<{ message?: string }>('/v1/training/export', {
+      method: 'POST',
+      body: JSON.stringify({
+        export_path: exportPath ?? './lora_output/final_lora',
+        lora_output_dir: loraOutputDir ?? './lora_output',
+      }),
+    });
+    res.json({ status: data.message ?? 'Export completed' });
   } catch (error) {
     console.error('[Training] Export LoRA error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to export LoRA' });
@@ -857,14 +1018,9 @@ router.post('/export', authMiddleware, async (req: AuthenticatedRequest, res: Re
 router.post('/import-dataset', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const { datasetType } = req.body;
-
-    const client = await getGradioClient();
-    const result = await client.predict('/import_dataset', [
-      datasetType ?? 'train',
-    ]);
-    const data = result.data as unknown[];
-
-    res.json({ status: data[0] });
+    res.status(501).json({
+      error: `Dataset import type '${datasetType ?? 'train'}' is not exposed by the ACE-Step REST API used by this app.`,
+    });
   } catch (error) {
     console.error('[Training] Import dataset error:', error);
     res.status(500).json({ error: error instanceof Error ? error.message : 'Failed to import dataset' });
